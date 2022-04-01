@@ -3,14 +3,13 @@ import json
 import sys
 import re
 import os
-from slugify import slugify
 
 
 class Downloader(object):
     def __init__(
         self,
         cookie,
-        download_path=os.environ.get('FILE_PATH', '/content/ss'),
+        download_path=os.environ.get('FILE_PATH', './courses'),
         pk='BCpkADawqM2OOcM6njnM7hf9EaK6lIFlqiXB0iWjqGWUQjU7R8965xUvIQNqdQbnDTLz0IAO7E6Ir2rIbXJtFdzrGtitoee0n1XXRliD-RH9A-svuvNW9qgo3Bh34HEZjXjG4Nml4iyz3KqF',
         brightcove_account_id=3695997568001,
     ):
@@ -20,12 +19,11 @@ class Downloader(object):
         self.brightcove_account_id = brightcove_account_id
         self.pythonversion = 3 if sys.version_info >= (3, 0) else 2
 
-    def is_unicode_string(self, string):
-        if (self.pythonversion == 3 and isinstance(string, str)) or (self.pythonversion == 2 and isinstance(string, unicode)):
-            return True
-
-        else:
-            return False
+    def fix_name(self, name):
+        forbidden = ["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]
+        for char in forbidden:
+            name = name.replace (char, "_")
+        return name
 
     def download_course_by_url(self, url):
         m = re.match(r'https://www.skillshare.com/classes/.*?/(\d+)', url)
@@ -39,78 +37,67 @@ class Downloader(object):
         data = self.fetch_course_data_by_class_id(class_id=class_id)
         teacher_name = None
 
-        if 'vanity_username' in data['_embedded']['teacher']:
-            teacher_name = data['_embedded']['teacher']['vanity_username']
+        if 'full_name' in data['_embedded']['teacher']:
+            teacher_name = data['_embedded']['teacher']['full_name']
 
         if not teacher_name:
-            teacher_name = data['_embedded']['teacher']['full_name']
+            teacher_name = data['_embedded']['teacher']['vanity_username']
 
         if not teacher_name:
             raise Exception('Failed to read teacher name from data')
 
-        if self.is_unicode_string(teacher_name):
-            teacher_name = teacher_name.encode('ascii', 'replace')
+        teacher_name = self.fix_name(teacher_name)
+        title = self.fix_name(data['title'])
 
-        title = data['title']
+        for s in data['_embedded']['sessions']['_embedded']['sessions']:
+            
+            video_id = None
 
-        if self.is_unicode_string(title):
-            title = title.encode('ascii', 'replace')  # ignore any weird char
+            if 'video_hashed_id' in s and s['video_hashed_id']:
+                video_id = s['video_hashed_id'].split(':')[1]
 
-        base_path = os.path.abspath(
-            os.path.join(
-                self.download_path,
-                slugify(teacher_name),
-                slugify(title),
+            if not video_id:
+                # NOTE: this happens sometimes...
+                # seems random and temporary but might be some random
+                # server-side check on user-agent etc?
+                # ...think it's more stable now with those set to
+                # emulate an android device
+                raise Exception('Failed to read video ID from data')
+
+            s_title = self.fix_name(s['title'])
+            
+            base_path = os.path.abspath(
+                os.path.join(
+                    self.download_path,
+                    teacher_name,
+                    title,
+                    'Unit {}'.format(str(s['unit_id'] + 1).zfill(2))
+                )
+            ).rstrip('/')
+            
+            if not os.path.exists(base_path):
+                os.makedirs(base_path)
+            
+            # remove unit and index from title, if present
+            s_title = re.sub("^\d+?\s\d+?\s", "", s_title)
+            # combine index to title, for he file name
+            file_name = '{} - {}'.format( str(s['index'] + 1).zfill(3), s_title,)
+
+            self.download_video(
+                fpath='{base_path}/{session}.mp4'.format(
+                    base_path=base_path,
+                    session=file_name,
+                ),
+                video_id=video_id,
             )
-        ).rstrip('/')
 
-        if not os.path.exists(base_path):
-            os.makedirs(base_path)
-
-        for u in data['_embedded']['units']['_embedded']['units']:
-            for s in u['_embedded']['sessions']['_embedded']['sessions']:
-                video_id = None
-
-                if 'video_hashed_id' in s and s['video_hashed_id']:
-                    video_id = s['video_hashed_id'].split(':')[1]
-
-                if not video_id:
-                    # NOTE: this happens sometimes...
-                    # seems random and temporary but might be some random
-                    # server-side check on user-agent etc?
-                    # ...think it's more stable now with those set to
-                    # emulate an android device
-                    raise Exception('Failed to read video ID from data')
-
-                s_title = s['title']
-
-                if self.is_unicode_string(s_title):
-                    s_title = s_title.encode('ascii', 'replace')  # ignore any weird char
-
-                file_name = '{} - {}'.format(
-                    str(s['index'] + 1).zfill(2),
-                    slugify(s_title),
-                )
-
-                self.download_video(
-                    fpath='{base_path}/{session}.mp4'.format(
-                        base_path=base_path,
-                        session=file_name,
-                    ),
-                    video_id=video_id,
-                )
-
-                print('')
+            print('')
 
     def fetch_course_data_by_class_id(self, class_id):
         res = requests.get(
             url='https://api.skillshare.com/classes/{}'.format(class_id),
             headers={
-                'Accept': 'application/vnd.skillshare.class+json;,version=0.8',
-                'User-Agent': 'Skillshare/5.3.0; Android 9.0.1',
-                'Host': 'api.skillshare.com',
-                'Referer': 'https://www.skillshare.com/',
-                'cookie': self.cookie,
+                'cookie': self.cookie
             }
         )
 
