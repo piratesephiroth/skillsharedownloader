@@ -80,7 +80,7 @@ class Downloader(object):
             
             # remove unit and index from title, if present
             s_title = re.sub("^\d+?\s\d+?\s", "", s_title)
-            # combine index to title, for he file name
+            # combine index to title, for the file name
             file_name = '{} - {}'.format( str(s['index'] + 1).zfill(3), s_title,)
 
             self.download_video(
